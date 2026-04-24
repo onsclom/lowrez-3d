@@ -56,24 +56,61 @@ const cubeEdges = [
   { start: 3, end: 7 },
 ];
 
-function project(point: { x: number; y: number; z: number }): {
-  x: number;
-  y: number;
-} {
+const NEAR = 0.1;
+
+const camera = {
+  position: { x: 0, y: 0, z: -5 },
+  yaw: 0,
+  pitch: 0,
+};
+
+const MOVE_SPEED = 3;
+const MOUSE_SENSITIVITY = 0.002;
+const PITCH_LIMIT = Math.PI / 2 - 0.01;
+
+const keys = new Set<string>();
+window.addEventListener("keydown", (e) => keys.add(e.code));
+window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+canvas.addEventListener("click", () => canvas.requestPointerLock());
+window.addEventListener("mousemove", (e) => {
+  if (document.pointerLockElement !== canvas) return;
+  camera.yaw += e.movementX * MOUSE_SENSITIVITY;
+  camera.pitch -= e.movementY * MOUSE_SENSITIVITY;
+  if (camera.pitch > PITCH_LIMIT) camera.pitch = PITCH_LIMIT;
+  if (camera.pitch < -PITCH_LIMIT) camera.pitch = -PITCH_LIMIT;
+});
+
+type Vec3 = { x: number; y: number; z: number };
+type Vec2 = { x: number; y: number };
+
+function worldToCamera(p: Vec3): Vec3 {
+  let x = p.x - camera.position.x;
+  let y = p.y - camera.position.y;
+  let z = p.z - camera.position.z;
+
+  const cy = Math.cos(-camera.yaw);
+  const sy = Math.sin(-camera.yaw);
+  [x, z] = [x * cy + z * sy, -x * sy + z * cy];
+
+  const cp = Math.cos(-camera.pitch);
+  const sp = Math.sin(-camera.pitch);
+  [y, z] = [y * cp - z * sp, y * sp + z * cp];
+
+  return { x, y, z };
+}
+
+function project(p: Vec3): Vec2 {
   return {
-    x: point.x / point.z,
-    y: point.y / point.z,
+    x: p.x / p.z,
+    y: p.y / p.z,
   };
 }
 
-function worldToScreen(point: { x: number; y: number; z: number }): {
-  x: number;
-  y: number;
-} {
-  const projected = project(point);
+function toScreen(p: Vec2): Vec2 {
   return {
-    x: ((projected.x + 1) * WIDTH) / 2,
-    y: ((projected.y + 1) * HEIGHT) / 2,
+    x: ((p.x + 1) * WIDTH) / 2,
+    y: ((p.y + 1) * HEIGHT) / 2,
   };
 }
 
@@ -103,7 +140,43 @@ function drawLine(
   }
 }
 
+let lastTime = performance.now();
+
 (function tick() {
+  const now = performance.now();
+  const dt = (now - lastTime) / 1000;
+  lastTime = now;
+
+  const sinY = Math.sin(camera.yaw);
+  const cosY = Math.cos(camera.yaw);
+  let fx = 0;
+  let fz = 0;
+  if (keys.has("KeyW")) {
+    fx += sinY;
+    fz += cosY;
+  }
+  if (keys.has("KeyS")) {
+    fx -= sinY;
+    fz -= cosY;
+  }
+  if (keys.has("KeyD")) {
+    fx += cosY;
+    fz -= sinY;
+  }
+  if (keys.has("KeyA")) {
+    fx -= cosY;
+    fz += sinY;
+  }
+  const len = Math.hypot(fx, fz);
+  if (len > 0) {
+    camera.position.x += (fx / len) * MOVE_SPEED * dt;
+    camera.position.z += (fz / len) * MOVE_SPEED * dt;
+  }
+  if (keys.has("Space")) camera.position.y -= MOVE_SPEED * dt;
+  if (keys.has("ShiftLeft") || keys.has("ShiftRight")) {
+    camera.position.y += MOVE_SPEED * dt;
+  }
+
   const scale = Math.min(innerWidth / WIDTH, innerHeight / HEIGHT);
   canvas.style.width = `${WIDTH * scale}px`;
   canvas.style.height = `${HEIGHT * scale}px`;
@@ -120,10 +193,12 @@ function drawLine(
   }
 
   // draw the cube
+  const cameraPoints = cubePoints.map(worldToCamera);
   for (const edge of cubeEdges) {
-    const start = worldToScreen(cubePoints[edge.start]);
-    const end = worldToScreen(cubePoints[edge.end]);
-    drawLine(start, end);
+    const a = cameraPoints[edge.start]!;
+    const b = cameraPoints[edge.end]!;
+    if (a.z <= NEAR || b.z <= NEAR) continue;
+    drawLine(toScreen(project(a)), toScreen(project(b)));
   }
 
   ctx.putImageData(pixels, 0, 0);
