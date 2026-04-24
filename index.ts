@@ -1,11 +1,15 @@
-const WIDTH = 256;
-const HEIGHT = 256;
+const WIDTH = 512;
+const HEIGHT = 512;
 const NEAR = 0.1;
 const FOV = Math.PI / 2;
 const FOCAL = 1 / Math.tan(FOV / 2);
 const MOVE_SPEED = 3;
 const MOUSE_SENSITIVITY = 0.002;
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
+const SPHERE_COUNT = 80;
+const SPHERE_SPREAD = 25;
+const SEGMENT_COUNT = 120;
+const SEGMENT_SPREAD = 25;
 
 type Vec3 = { x: number; y: number; z: number };
 type Vec2 = { x: number; y: number };
@@ -36,9 +40,36 @@ const cubeEdges = [
   { start: 3, end: 7 },
 ];
 
-const sphereBillboards: { center: Vec3; radius: number }[] = [
-  { center: { x: 0, y: 0, z: 0 }, radius: 1 },
-];
+const sphereBillboards: { center: Vec3; radius: number }[] = Array.from(
+  { length: SPHERE_COUNT },
+  () => ({
+    center: {
+      x: (Math.random() - 0.5) * 2 * SPHERE_SPREAD,
+      y: (Math.random() - 0.5) * 2 * SPHERE_SPREAD,
+      z: (Math.random() - 0.5) * 2 * SPHERE_SPREAD,
+    },
+    radius: 0.1 + Math.random() * 1,
+  }),
+);
+
+const lineSegments: { a: Vec3; b: Vec3 }[] = Array.from(
+  { length: SEGMENT_COUNT },
+  () => {
+    const cx = (Math.random() - 0.5) * 2 * SEGMENT_SPREAD;
+    const cy = (Math.random() - 0.5) * 2 * SEGMENT_SPREAD;
+    const cz = (Math.random() - 0.5) * 2 * SEGMENT_SPREAD;
+    const theta = Math.random() * 2 * Math.PI;
+    const phi = Math.acos(2 * Math.random() - 1);
+    const half = (0.2 + Math.random() * 1.2) / 2;
+    const dx = Math.sin(phi) * Math.cos(theta) * half;
+    const dy = Math.sin(phi) * Math.sin(theta) * half;
+    const dz = Math.cos(phi) * half;
+    return {
+      a: { x: cx - dx, y: cy - dy, z: cz - dz },
+      b: { x: cx + dx, y: cy + dy, z: cz + dz },
+    };
+  },
+);
 
 const camera = {
   position: { x: 0, y: 0, z: -5 },
@@ -59,9 +90,9 @@ canvas.style.imageRendering = "pixelated";
 canvas.width = WIDTH;
 canvas.height = HEIGHT;
 
-const keys = new Set<string>();
-window.addEventListener("keydown", (e) => keys.add(e.code));
-window.addEventListener("keyup", (e) => keys.delete(e.code));
+const keysDown = new Set<string>();
+window.addEventListener("keydown", (e) => keysDown.add(e.code));
+window.addEventListener("keyup", (e) => keysDown.delete(e.code));
 
 canvas.addEventListener("click", () => canvas.requestPointerLock());
 window.addEventListener("mousemove", (e) => {
@@ -167,19 +198,19 @@ let lastTime = performance.now();
   const cosY = Math.cos(camera.yaw);
   let fx = 0;
   let fz = 0;
-  if (keys.has("KeyW")) {
+  if (keysDown.has("KeyW")) {
     fx += sinY;
     fz += cosY;
   }
-  if (keys.has("KeyS")) {
+  if (keysDown.has("KeyS")) {
     fx -= sinY;
     fz -= cosY;
   }
-  if (keys.has("KeyD")) {
+  if (keysDown.has("KeyD")) {
     fx += cosY;
     fz -= sinY;
   }
-  if (keys.has("KeyA")) {
+  if (keysDown.has("KeyA")) {
     fx -= cosY;
     fz += sinY;
   }
@@ -188,8 +219,8 @@ let lastTime = performance.now();
     camera.position.x += (fx / len) * MOVE_SPEED * dt;
     camera.position.z += (fz / len) * MOVE_SPEED * dt;
   }
-  if (keys.has("Space")) camera.position.y += MOVE_SPEED * dt;
-  if (keys.has("ShiftLeft") || keys.has("ShiftRight")) {
+  if (keysDown.has("Space")) camera.position.y += MOVE_SPEED * dt;
+  if (keysDown.has("ShiftLeft") || keysDown.has("ShiftRight")) {
     camera.position.y -= MOVE_SPEED * dt;
   }
 
@@ -211,6 +242,15 @@ let lastTime = performance.now();
     drawLine(toScreen(project(clipped[0])), toScreen(project(clipped[1])));
   }
 
+  // draw a small sphere at each cube vertex
+  const CUBE_VERTEX_RADIUS = 0.15;
+  for (const c of cameraPoints) {
+    if (c.z <= NEAR) continue;
+    const screen = toScreen(project(c));
+    const radius = ((CUBE_VERTEX_RADIUS * FOCAL) / c.z) * (WIDTH / 2);
+    drawCircle(screen.x, screen.y, radius);
+  }
+
   // draw sphere billboards
   for (const sphere of sphereBillboards) {
     const c = worldToCamera(sphere.center);
@@ -218,6 +258,13 @@ let lastTime = performance.now();
     const screen = toScreen(project(c));
     const radius = ((sphere.radius * FOCAL) / c.z) * (WIDTH / 2);
     drawCircle(screen.x, screen.y, radius);
+  }
+
+  // draw random line segments
+  for (const seg of lineSegments) {
+    const clipped = clipEdgeNear(worldToCamera(seg.a), worldToCamera(seg.b));
+    if (!clipped) continue;
+    drawLine(toScreen(project(clipped[0])), toScreen(project(clipped[1])));
   }
 
   ctx.putImageData(pixels, 0, 0);
