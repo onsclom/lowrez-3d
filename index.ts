@@ -1,34 +1,12 @@
-const canvas = document.createElement("canvas");
-document.body.appendChild(canvas);
-
 const WIDTH = 256;
 const HEIGHT = 256;
+const NEAR = 0.1;
+const MOVE_SPEED = 3;
+const MOUSE_SENSITIVITY = 0.002;
+const PITCH_LIMIT = Math.PI / 2 - 0.01;
 
-document.body.style.margin = "0";
-document.body.style.position = "fixed";
-document.body.style.inset = "0";
-document.body.style.display = "flex";
-document.body.style.alignItems = "center";
-document.body.style.justifyContent = "center";
-document.body.style.background = "gray";
-canvas.style.imageRendering = "pixelated";
-
-const ctx = canvas.getContext("2d");
-if (!ctx) throw new Error("No canvas context");
-canvas.width = WIDTH;
-canvas.height = HEIGHT;
-
-const pixels = new ImageData(WIDTH, HEIGHT);
-for (let y = 0; y < HEIGHT; y++) {
-  for (let x = 0; x < WIDTH; x++) {
-    const i = (y * WIDTH + x) * 4;
-    const c = (x + y) & 1 ? 0 : 255;
-    pixels.data[i] = c;
-    pixels.data[i + 1] = c;
-    pixels.data[i + 2] = c;
-    pixels.data[i + 3] = 255;
-  }
-}
+type Vec3 = { x: number; y: number; z: number };
+type Vec2 = { x: number; y: number };
 
 const cubePoints = [
   { x: 1, y: 1, z: 1 },
@@ -56,17 +34,24 @@ const cubeEdges = [
   { start: 3, end: 7 },
 ];
 
-const NEAR = 0.1;
-
 const camera = {
   position: { x: 0, y: 0, z: -5 },
   yaw: 0,
   pitch: 0,
 };
 
-const MOVE_SPEED = 3;
-const MOUSE_SENSITIVITY = 0.002;
-const PITCH_LIMIT = Math.PI / 2 - 0.01;
+const canvas = document.createElement("canvas");
+document.body.appendChild(canvas);
+document.body.style.margin = "0";
+document.body.style.position = "fixed";
+document.body.style.inset = "0";
+document.body.style.display = "flex";
+document.body.style.alignItems = "center";
+document.body.style.justifyContent = "center";
+document.body.style.background = "gray";
+canvas.style.imageRendering = "pixelated";
+canvas.width = WIDTH;
+canvas.height = HEIGHT;
 
 const keys = new Set<string>();
 window.addEventListener("keydown", (e) => keys.add(e.code));
@@ -81,8 +66,20 @@ window.addEventListener("mousemove", (e) => {
   if (camera.pitch < -PITCH_LIMIT) camera.pitch = -PITCH_LIMIT;
 });
 
-type Vec3 = { x: number; y: number; z: number };
-type Vec2 = { x: number; y: number };
+const ctx = canvas.getContext("2d");
+if (!ctx) throw new Error("No canvas context");
+
+const pixels = new ImageData(WIDTH, HEIGHT);
+for (let y = 0; y < HEIGHT; y++) {
+  for (let x = 0; x < WIDTH; x++) {
+    const i = (y * WIDTH + x) * 4;
+    const c = (x + y) & 1 ? 0 : 255;
+    pixels.data[i] = c;
+    pixels.data[i + 1] = c;
+    pixels.data[i + 2] = c;
+    pixels.data[i + 3] = 255;
+  }
+}
 
 function worldToCamera(p: Vec3): Vec3 {
   let x = p.x - camera.position.x;
@@ -98,6 +95,20 @@ function worldToCamera(p: Vec3): Vec3 {
   [y, z] = [y * cp - z * sp, y * sp + z * cp];
 
   return { x, y, z };
+}
+
+function clipEdgeNear(a: Vec3, b: Vec3): [Vec3, Vec3] | null {
+  const aIn = a.z > NEAR;
+  const bIn = b.z > NEAR;
+  if (!aIn && !bIn) return null;
+  if (aIn && bIn) return [a, b];
+  const t = (NEAR - a.z) / (b.z - a.z);
+  const intersect: Vec3 = {
+    x: a.x + t * (b.x - a.x),
+    y: a.y + t * (b.y - a.y),
+    z: NEAR,
+  };
+  return aIn ? [a, intersect] : [intersect, b];
 }
 
 function project(p: Vec3): Vec2 {
@@ -141,7 +152,6 @@ function drawLine(
 }
 
 let lastTime = performance.now();
-
 (function tick() {
   const now = performance.now();
   const dt = (now - lastTime) / 1000;
@@ -195,10 +205,12 @@ let lastTime = performance.now();
   // draw the cube
   const cameraPoints = cubePoints.map(worldToCamera);
   for (const edge of cubeEdges) {
-    const a = cameraPoints[edge.start]!;
-    const b = cameraPoints[edge.end]!;
-    if (a.z <= NEAR || b.z <= NEAR) continue;
-    drawLine(toScreen(project(a)), toScreen(project(b)));
+    const clipped = clipEdgeNear(
+      cameraPoints[edge.start]!,
+      cameraPoints[edge.end]!,
+    );
+    if (!clipped) continue;
+    drawLine(toScreen(project(clipped[0])), toScreen(project(clipped[1])));
   }
 
   ctx.putImageData(pixels, 0, 0);
