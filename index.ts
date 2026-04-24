@@ -1,6 +1,8 @@
 const WIDTH = 256;
 const HEIGHT = 256;
 const NEAR = 0.1;
+const FOV = Math.PI / 2;
+const FOCAL = 1 / Math.tan(FOV / 2);
 const MOVE_SPEED = 3;
 const MOUSE_SENSITIVITY = 0.002;
 const PITCH_LIMIT = Math.PI / 2 - 0.01;
@@ -32,6 +34,10 @@ const cubeEdges = [
   { start: 1, end: 5 },
   { start: 2, end: 6 },
   { start: 3, end: 7 },
+];
+
+const sphereBillboards: { center: Vec3; radius: number }[] = [
+  { center: { x: 0, y: 0, z: 0 }, radius: 1 },
 ];
 
 const camera = {
@@ -68,18 +74,8 @@ window.addEventListener("mousemove", (e) => {
 
 const ctx = canvas.getContext("2d");
 if (!ctx) throw new Error("No canvas context");
-
 const pixels = new ImageData(WIDTH, HEIGHT);
-for (let y = 0; y < HEIGHT; y++) {
-  for (let x = 0; x < WIDTH; x++) {
-    const i = (y * WIDTH + x) * 4;
-    const c = (x + y) & 1 ? 0 : 255;
-    pixels.data[i] = c;
-    pixels.data[i + 1] = c;
-    pixels.data[i + 2] = c;
-    pixels.data[i + 3] = 255;
-  }
-}
+const pixels32 = new Uint32Array(pixels.data.buffer);
 
 function worldToCamera(p: Vec3): Vec3 {
   let x = p.x - camera.position.x;
@@ -90,8 +86,8 @@ function worldToCamera(p: Vec3): Vec3 {
   const sy = Math.sin(-camera.yaw);
   [x, z] = [x * cy + z * sy, -x * sy + z * cy];
 
-  const cp = Math.cos(-camera.pitch);
-  const sp = Math.sin(-camera.pitch);
+  const cp = Math.cos(camera.pitch);
+  const sp = Math.sin(camera.pitch);
   [y, z] = [y * cp - z * sp, y * sp + z * cp];
 
   return { x, y, z };
@@ -113,22 +109,36 @@ function clipEdgeNear(a: Vec3, b: Vec3): [Vec3, Vec3] | null {
 
 function project(p: Vec3): Vec2 {
   return {
-    x: p.x / p.z,
-    y: p.y / p.z,
+    x: (p.x * FOCAL) / p.z,
+    y: (p.y * FOCAL) / p.z,
   };
 }
 
 function toScreen(p: Vec2): Vec2 {
   return {
     x: ((p.x + 1) * WIDTH) / 2,
-    y: ((p.y + 1) * HEIGHT) / 2,
+    y: ((1 - p.y) * HEIGHT) / 2,
   };
 }
 
-function drawLine(
-  start: { x: number; y: number },
-  end: { x: number; y: number },
-) {
+function drawCircle(cx: number, cy: number, r: number) {
+  const r2 = r * r;
+  const x0 = Math.max(0, Math.floor(cx - r));
+  const x1 = Math.min(WIDTH - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r));
+  const y1 = Math.min(HEIGHT - 1, Math.ceil(cy + r));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const dx = x - cx;
+      const dy = y - cy;
+      if (dx * dx + dy * dy <= r2) {
+        pixels32[y * WIDTH + x] = 0xffffffff;
+      }
+    }
+  }
+}
+
+function drawLine(start: Vec2, end: Vec2) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const steps = Math.max(Math.abs(dx), Math.abs(dy));
@@ -137,14 +147,10 @@ function drawLine(
   let x = start.x;
   let y = start.y;
   for (let i = 0; i <= steps; i++) {
-    const pixelX = Math.round(x);
-    const pixelY = Math.round(y);
-    if (pixelX >= 0 && pixelX < WIDTH && pixelY >= 0 && pixelY < HEIGHT) {
-      const i = (pixelY * WIDTH + pixelX) * 4;
-      pixels.data[i] = 255;
-      pixels.data[i + 1] = 255;
-      pixels.data[i + 2] = 255;
-      pixels.data[i + 3] = 255;
+    const px = Math.round(x);
+    const py = Math.round(y);
+    if (px >= 0 && px < WIDTH && py >= 0 && py < HEIGHT) {
+      pixels32[py * WIDTH + px] = 0xffffffff;
     }
     x += xStep;
     y += yStep;
@@ -182,9 +188,9 @@ let lastTime = performance.now();
     camera.position.x += (fx / len) * MOVE_SPEED * dt;
     camera.position.z += (fz / len) * MOVE_SPEED * dt;
   }
-  if (keys.has("Space")) camera.position.y -= MOVE_SPEED * dt;
+  if (keys.has("Space")) camera.position.y += MOVE_SPEED * dt;
   if (keys.has("ShiftLeft") || keys.has("ShiftRight")) {
-    camera.position.y += MOVE_SPEED * dt;
+    camera.position.y -= MOVE_SPEED * dt;
   }
 
   const scale = Math.min(innerWidth / WIDTH, innerHeight / HEIGHT);
@@ -192,15 +198,7 @@ let lastTime = performance.now();
   canvas.style.height = `${HEIGHT * scale}px`;
 
   // clear the pixels
-  for (let y = 0; y < HEIGHT; y++) {
-    for (let x = 0; x < WIDTH; x++) {
-      const i = (y * WIDTH + x) * 4;
-      pixels.data[i] = 0;
-      pixels.data[i + 1] = 0;
-      pixels.data[i + 2] = 0;
-      pixels.data[i + 3] = 255;
-    }
-  }
+  pixels32.fill(0xff000000);
 
   // draw the cube
   const cameraPoints = cubePoints.map(worldToCamera);
@@ -211,6 +209,15 @@ let lastTime = performance.now();
     );
     if (!clipped) continue;
     drawLine(toScreen(project(clipped[0])), toScreen(project(clipped[1])));
+  }
+
+  // draw sphere billboards
+  for (const sphere of sphereBillboards) {
+    const c = worldToCamera(sphere.center);
+    if (c.z <= NEAR) continue;
+    const screen = toScreen(project(c));
+    const radius = ((sphere.radius * FOCAL) / c.z) * (WIDTH / 2);
+    drawCircle(screen.x, screen.y, radius);
   }
 
   ctx.putImageData(pixels, 0, 0);
