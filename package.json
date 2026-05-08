@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun index.html"
+    "dev": "bun index.html",
+    "build": "bun build index.html --outdir dist"
   },
   "devDependencies": {
     "@types/bun": "latest"
